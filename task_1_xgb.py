@@ -101,5 +101,6 @@ model = xgb.train(para, xgb_train, times, validation, early_stopping_rounds=50, 
 p_test = model.predict(xgb_test)
 
 best = pd.DataFrame({'SK_ID_CURR': test['SK_ID_CURR', 'TARGET': p_test]})
+print(best.shape)
 
 
