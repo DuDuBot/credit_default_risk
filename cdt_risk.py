@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.model_selection import train_test_split
 from sklearn.experimental import enable_iterative_imputer  # do not delete
 from sklearn.impute import IterativeImputer
 from sklearn.ensemble import ExtraTreesRegressor
@@ -9,6 +10,13 @@ from sklearn.ensemble import IsolationForest
 from sklearn.linear_model import BayesianRidge
 
 from feature_engineering import feature_eng
+from info_value import iv_calculator
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import cross_val_score
 
 
 
@@ -102,18 +110,88 @@ non_id_col = [col for col in X.columns if col != 'SK_ID_CURR']
 # checking imbalance
 # print(y['TARGET'].value_counts())
 
-# combine data from application_tran/test
-train_dummies['Credit_flag'] = train_dummies['AMT_INCOME_TOTAL'] > train_dummies['AMT_CREDIT']
-train_dummies['Percent_Days_employed'] = train_dummies['DAYS_EMPLOYED']/train_dummies['DAYS_BIRTH'] * 100
-train_dummies['Annuity_as_percent_income'] = train_dummies['AMT_ANNUITY'] / train_dummies['AMT_INCOME_TOTAL'] * 100
-train_dummies['Credit_as_percent_income'] = train_dummies['AMT_CREDIT'] / train_dummies['AMT_INCOME_TOTAL'] * 100
+# combine data from other csv files
+train, test = feature_eng(test_dummies, train_dummies)
 
-test_dummies['Credit_flag'] = test_dummies['AMT_INCOME_TOTAL'] > test_dummies['AMT_CREDIT']
-test_dummies['Percent_Days_employed'] = test_dummies['DAYS_EMPLOYED'] / test_dummies['DAYS_BIRTH'] * 100
-test_dummies['Annuity_as_percent_income'] = test_dummies['AMT_ANNUITY'] / test_dummies['AMT_INCOME_TOTAL'] * 100
-test_dummies['Credit_as_percent_income'] = test_dummies['AMT_CREDIT'] / test_dummies['AMT_INCOME_TOTAL'] * 100
+# train, test and validation sets
+X = train.drop(columns=['TARGET'])
+y = train['TARGET']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
 
-# combine data from bureau
-feature_eng(test_dummies, train_dummies)
+# calculate information value
+final_iv, IV = iv_calculator(X_train, y_train)
+# print(IV)
 
+list_of_columns=IV[IV['IV'] > 0.02]['VAR_NAME'].to_list()
+# print(len(list_of_columns))
+
+X_train_selected_features = X_train[list_of_columns]
+X_test_selected_features = X_test[list_of_columns]
+X_train_selected_features['SK_ID_CURR'] = X_train['SK_ID_CURR']
+X_test_selected_features['SK_ID_CURR'] = X_test['SK_ID_CURR']
+
+test_selected_features = test[list_of_columns]
+test_selected_features['SK_ID_CURR'] = test['SK_ID_CURR']
+
+# data imputation
+imputer = IterativeImputer(BayesianRidge())
+X_train_imputed = pd.DataFrame(imputer.fit_transform(X_train_selected_features))
+X_train_imputed.columns = X_train_selected_features.columns
+
+imputer = IterativeImputer(BayesianRidge())
+test_selected_features_subset1 = test_selected_features.iloc[:, np.r_[63, 0: 30]]
+test_imputed_subset1 = pd.DataFrame(imputer.fit_transform(test_selected_features_subset1))
+test_imputed_subset1.columns = test_selected_features_subset1.columns
+
+test_selected_features_subset2 = test_selected_features.iloc[:, np.r_[63, 31: 63]]
+test_imputed_subset2 = pd.DataFrame(imputer.fit_transform(test_selected_features_subset2))
+test_imputed_subset2.columns = test_selected_features_subset2.columns
+
+test_imputed = pd.merge(test_imputed_subset1, test_imputed_subset2, on='SK_ID_CURR')
+
+imputer = IterativeImputer(BayesianRidge())
+X_test_imputed = pd.DataFrame(imputer.fit_transform(X_test_selected_features))
+X_test_imputed.columns = X_test_selected_features.columns
+
+# print(X_test_imputed.shape)
+# print(X_train_imputed.shape)
+# print(test_imputed.shape)
+
+# X_train_imputed, test_imputed = test_imputed.align(X_train_imputed, join='inner', axis=1)
+# print(X_train_imputed.shape)
+# print(y_train.shape)
+# X_train_imputed, X_test_imputed = X_train_imputed.align(X_test_imputed, join='inner', axis=1)
+# print(X_train_imputed.shape)
+# print(X_test_imputed.shape)
+
+
+# ML part
+# logistic regression
+lr_clf = LogisticRegression(random_state=0, class_weight='balanced')
+lr_clf.fit(X_train_imputed, y_train)
+y_train_pred_lr = cross_val_predict(lr_clf, X_train_imputed, y_train, cv=3)
+print('lr_accuracy(Training):', cross_val_score(lr_clf, X_train_imputed, y_train, cv=3, scoring='accuracy'))
+print('lr_accuracy(Test):', cross_val_score(lr_clf, X_test_imputed, y_test, cv=3, scoring='accuracy'))
+
+# random forest
+rf_clf = RandomForestClassifier(n_estimators=10, random_state=0, n_jobs=-1, class_weight="balanced")
+rf_clf.fit(X_train_imputed, y_train)
+print('rf_accuracy(Training):', cross_val_score(rf_clf, X_train_imputed, y_train, cv=3, scoring='accuracy'))
+print('rf_accuracy(Test):', cross_val_score(rf_clf, X_test_imputed, y_test, cv=3, scoring='accuracy'))
+
+# xgboost
+weight = y_train.value_counts().values.tolist()[0] / y_train.value_counts().values.tolist()[1]
+xgb_clf = XGBClassifier(scale_pos_weight=weight)
+xgb_clf.fit(X_train_imputed, y_train)
+print('xgb_accuracy(Training):', cross_val_score(xgb_clf, X_train_imputed, y_train, cv=3, scoring='accuracy'))
+print('xgb_accuracy(Test):', cross_val_score(xgb_clf, X_test_imputed, y_test, cv=3, scoring='accuracy'))
+
+
+# # result
+# lr_accuracy(Training): [0.64089119 0.64428131 0.62870418]
+# lr_accuracy(Test): [0.65265109 0.64362714 0.64011512]
+# rf_accuracy(Training): [0.91873468 0.9189176  0.91872149]
+# rf_accuracy(Test): [0.91829667 0.91854056 0.918004  ]
+# xgb_accuracy(Training): [0.74964331 0.7494238  0.74883539]
+# xgb_accuracy(Test): [0.82425248 0.82083801 0.82654505]
 

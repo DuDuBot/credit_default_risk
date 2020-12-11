@@ -176,6 +176,27 @@ def feature_eng(test_dummies, train_dummies):
     gc.collect()
 
     # combine credit_card_balance
+    # numerical features
+    grp = credit_card_balance.drop('SK_ID_PREV', axis=1).groupby(by=['SK_ID_CURR']).mean().reset_index()
+    grp.columns = ['CREDIT_' + column if column != 'SK_ID_CURR' else column for column in grp.columns]
+
+    train = train.merge(grp, on=['SK_ID_CURR'], how='left')
+    train.update(train[grp.columns].fillna(0))
+    test = test.merge(grp, on=['SK_ID_CURR'], how='left')
+    test.update(test[grp.columns].fillna(0))
+
+    # categorical features
+    credit_categorical = pd.get_dummies(credit_card_balance.select_dtypes('object'))
+    credit_categorical['SK_ID_CURR'] = credit_card_balance['SK_ID_CURR']
+    grp = credit_categorical.groupby('SK_ID_CURR').mean().reset_index()
+    grp.columns = ['CREDIT_' + column if column != 'SK_ID_CURR' else column for column in grp.columns]
+
+    train = train.merge(grp, on=['SK_ID_CURR'], how='left')
+    train.update(train[grp.columns].fillna(0))
+    test = test.merge(grp, on=['SK_ID_CURR'], how='left')
+    test.update(test[grp.columns].fillna(0))
+
+    return train, test
 
 
 
